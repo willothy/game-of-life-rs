@@ -98,7 +98,9 @@ impl<T: Terminal> Frontend for BrailleRenderer<T> {
                         }
                         termwiz::input::InputEvent::Resized { cols, rows } => {
                             *game = GameOfLife::new((cols as usize * 2, rows as usize * 3));
-                            game.init();
+                            continue;
+                        }
+                        termwiz::input::InputEvent::Wake => {
                             continue;
                         }
                         _ => {}
@@ -131,10 +133,12 @@ pub struct GameOfLife {
 
 impl GameOfLife {
     pub fn new(size: (usize, usize)) -> Self {
-        Self {
+        let mut new = Self {
             size,
             grid: vec![false; size.0 * size.1],
-        }
+        };
+        new.init();
+        new
     }
 
     pub fn init(&mut self) {
@@ -203,7 +207,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let screen = BufferedTerminal::new(new_terminal(caps)?)?;
     let mut render = BrailleRenderer::new(screen)?;
     let mut game = GameOfLife::new(render.size());
-    game.init();
 
     render.run(&mut game)?;
 
