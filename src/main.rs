@@ -142,7 +142,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut surface = Surface::new(w, h);
 
     loop {
-        match screen.terminal().poll_input(Some(Duration::ZERO)) {
+        match screen
+            .terminal()
+            .poll_input(Some(Duration::from_millis(50)))
+        {
             Ok(res) => match res {
                 Some(evt) => match evt {
                     termwiz::input::InputEvent::Key(k) => {
@@ -166,7 +169,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         game.render(&mut surface);
         screen.draw_from_screen(&surface, 0, 0);
         screen.flush()?;
-        std::thread::sleep(Duration::from_millis(50));
     }
 
     screen.terminal().exit_alternate_screen()?;
