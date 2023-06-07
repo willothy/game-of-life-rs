@@ -1,12 +1,128 @@
-use std::time::Duration;
+use std::{
+    error::Error,
+    time::{Duration, Instant},
+};
 
 use braille::BRAILLE;
 use rand::Rng;
 use termwiz::{
     caps::Capabilities,
-    surface::{Change, CursorVisibility, Surface},
+    surface::{Change, CursorVisibility},
     terminal::{buffered::BufferedTerminal, new_terminal, Terminal},
 };
+
+pub trait Frontend {
+    fn run(&mut self, game: &mut GameOfLife) -> Result<(), Box<dyn Error>>;
+}
+
+pub struct BrailleRenderer<T: Terminal> {
+    screen: BufferedTerminal<T>,
+}
+
+impl<T: Terminal> BrailleRenderer<T> {
+    pub fn new(screen: BufferedTerminal<T>) -> Result<Self, Box<dyn Error>> {
+        Ok(Self { screen })
+    }
+
+    pub fn size(&self) -> (usize, usize) {
+        let (w, h) = self.screen.dimensions();
+        (w * 2, h * 3)
+    }
+
+    pub fn screen(&mut self) -> &mut BufferedTerminal<T> {
+        &mut self.screen
+    }
+
+    pub fn render(&mut self, game: &GameOfLife) {
+        if self.screen.dimensions() != { (game.size.0 / 2, game.size.1 / 3) } {
+            self.screen.resize(game.size.0, game.size.1);
+        }
+        // 2x3 groups of cells to be represented by braille chars
+        let mut groups = vec![
+            vec![[false, false, false, false, false, false]; game.size.0 / 2];
+            game.size.1 / 3
+        ];
+
+        for y in 0..game.size.1 {
+            for x in 0..game.size.0 {
+                groups[y.saturating_div(3)][x.saturating_div(2)][(y % 3) + (x % 2)] =
+                    game.get(x, y);
+            }
+        }
+
+        let chars = groups
+            .into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|cell| {
+                        BRAILLE[cell[0] as usize][cell[3] as usize][cell[1] as usize]
+                            [cell[4] as usize][cell[2] as usize][cell[5] as usize][0][0]
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        self.screen.add_change(Change::CursorPosition {
+            x: termwiz::surface::Position::Absolute(0),
+            y: termwiz::surface::Position::Absolute(0),
+        });
+        let mut buf = String::new();
+        for y in 0..game.size.1 / 3 {
+            buf.clear();
+            for x in 0..game.size.0 / 2 {
+                let char = chars[y][x];
+                buf.push(char);
+            }
+            self.screen.add_change(&buf);
+        }
+        self.screen.flush().ok();
+    }
+}
+
+impl<T: Terminal> Frontend for BrailleRenderer<T> {
+    fn run(&mut self, game: &mut GameOfLife) -> Result<(), Box<dyn Error>> {
+        let term = self.screen().terminal();
+        // term.enter_alternate_screen()?;
+        term.set_raw_mode()?;
+        self.screen
+            .add_change(Change::CursorVisibility(CursorVisibility::Hidden));
+        loop {
+            let start = Instant::now();
+            match self.screen.terminal().poll_input(Some(DELAY)) {
+                Ok(res) => match res {
+                    Some(evt) => match evt {
+                        termwiz::input::InputEvent::Key(k) => {
+                            if k.key == termwiz::input::KeyCode::Char('q') {
+                                break;
+                            }
+                        }
+                        termwiz::input::InputEvent::Resized { cols, rows } => {
+                            *game = GameOfLife::new((cols as usize * 2, rows as usize * 3));
+                            game.init();
+                            continue;
+                        }
+                        _ => {}
+                    },
+                    None => {}
+                },
+                Err(_) => {
+                    break;
+                }
+            }
+            if start.elapsed() < DELAY {
+                std::thread::sleep(DELAY - start.elapsed());
+            }
+            game.step();
+            self.render(&game);
+            self.screen.flush()?;
+        }
+
+        self.screen.terminal().exit_alternate_screen()?;
+        self.screen
+            .add_change(Change::CursorVisibility(CursorVisibility::Visible));
+        Ok(())
+    }
+}
 
 pub struct GameOfLife {
     size: (usize, usize),
@@ -14,9 +130,7 @@ pub struct GameOfLife {
 }
 
 impl GameOfLife {
-    pub fn new(mut size: (usize, usize)) -> Self {
-        size.0 *= 2;
-        size.1 *= 3;
+    pub fn new(size: (usize, usize)) -> Self {
         Self {
             size,
             grid: vec![false; size.0 * size.1],
@@ -80,99 +194,18 @@ impl GameOfLife {
         }
         self.grid = next;
     }
-
-    pub fn render(&self, screen: &mut Surface) {
-        if screen.dimensions() != { (self.size.0 / 2, self.size.1 / 3) } {
-            screen.resize(self.size.0, self.size.1);
-        }
-        // 2x3 groups of cells to be represented by braille chars
-        let mut groups = vec![
-            vec![[false, false, false, false, false, false]; self.size.0 / 2];
-            self.size.1 / 3
-        ];
-
-        for y in 0..self.size.1 {
-            for x in 0..self.size.0 {
-                let group = &mut groups[y.saturating_div(3)][x.saturating_div(2)];
-                group[(y % 3) + (x % 2)] = self.get(x, y);
-            }
-        }
-
-        let chars = groups
-            .into_iter()
-            .map(|row| {
-                row.into_iter()
-                    .map(|cell| {
-                        let char = BRAILLE[cell[0] as usize][cell[3] as usize][cell[1] as usize]
-                            [cell[4] as usize][cell[2] as usize][cell[5] as usize][0][0];
-                        char
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-
-        screen.add_change(Change::CursorPosition {
-            x: termwiz::surface::Position::Absolute(0),
-            y: termwiz::surface::Position::Absolute(0),
-        });
-        let mut buf = String::new();
-        for y in 0..self.size.1 / 3 {
-            buf.clear();
-            for x in 0..self.size.0 / 2 {
-                let char = chars[y][x];
-                buf.push(char);
-            }
-            screen.add_change(&buf);
-        }
-    }
 }
+
+const DELAY: Duration = Duration::from_millis(50);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let caps = Capabilities::new_from_env()?;
-    let mut term = new_terminal(caps)?;
-    term.enter_alternate_screen()?;
-    term.set_raw_mode()?;
-    let mut screen = BufferedTerminal::new(term)?;
-    screen.add_change(Change::CursorVisibility(CursorVisibility::Hidden));
-    let (w, h) = screen.dimensions();
-
-    let mut game = GameOfLife::new((w, h));
+    let screen = BufferedTerminal::new(new_terminal(caps)?)?;
+    let mut render = BrailleRenderer::new(screen)?;
+    let mut game = GameOfLife::new(render.size());
     game.init();
 
-    let mut surface = Surface::new(w, h);
-
-    loop {
-        match screen
-            .terminal()
-            .poll_input(Some(Duration::from_millis(50)))
-        {
-            Ok(res) => match res {
-                Some(evt) => match evt {
-                    termwiz::input::InputEvent::Key(k) => {
-                        if k.key == termwiz::input::KeyCode::Char('q') {
-                            break;
-                        }
-                    }
-                    termwiz::input::InputEvent::Resized { cols, rows } => {
-                        game = GameOfLife::new((cols as usize, rows as usize));
-                        game.init();
-                    }
-                    _ => {}
-                },
-                None => {}
-            },
-            Err(_) => {
-                break;
-            }
-        }
-        game.step();
-        game.render(&mut surface);
-        screen.draw_from_screen(&surface, 0, 0);
-        screen.flush()?;
-    }
-
-    screen.terminal().exit_alternate_screen()?;
-    screen.add_change(Change::CursorVisibility(CursorVisibility::Visible));
+    render.run(&mut game)?;
 
     Ok(())
 }
