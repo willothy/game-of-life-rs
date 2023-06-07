@@ -7,6 +7,7 @@ use braille::BRAILLE;
 use rand::Rng;
 use termwiz::{
     caps::Capabilities,
+    input::{MouseButtons, MouseEvent},
     surface::{Change, CursorVisibility},
     terminal::{buffered::BufferedTerminal, new_terminal, Terminal},
 };
@@ -105,6 +106,22 @@ impl<T: Terminal> Frontend for BrailleRenderer<T> {
                         }
                         termwiz::input::InputEvent::Wake => {
                             continue;
+                        }
+                        termwiz::input::InputEvent::Mouse(MouseEvent {
+                            x,
+                            y,
+                            mouse_buttons,
+                            ..
+                        }) => {
+                            if mouse_buttons.contains(MouseButtons::LEFT) {
+                                let col = x as usize * 2;
+                                let row = y as usize * 3;
+                                for y in 0..3 {
+                                    for x in 0..2 {
+                                        game.set(col + x, row + y, true);
+                                    }
+                                }
+                            }
                         }
                         _ => {}
                     },
