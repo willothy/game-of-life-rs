@@ -82,12 +82,15 @@ impl<T: Terminal> BrailleRenderer<T> {
 impl<T: Terminal> Frontend for BrailleRenderer<T> {
     fn run(&mut self, game: &mut GameOfLife) -> Result<(), Box<dyn Error>> {
         let term = self.screen().terminal();
-        // term.enter_alternate_screen()?;
+        term.enter_alternate_screen()?;
         term.set_raw_mode()?;
         self.screen
             .add_change(Change::CursorVisibility(CursorVisibility::Hidden));
+        let mut start = Instant::now();
         loop {
-            let start = Instant::now();
+            if start.elapsed() >= DELAY {
+                start = Instant::now();
+            }
             match self.screen.terminal().poll_input(Some(DELAY)) {
                 Ok(res) => match res {
                     Some(evt) => match evt {
@@ -111,8 +114,8 @@ impl<T: Terminal> Frontend for BrailleRenderer<T> {
                     break;
                 }
             }
-            if start.elapsed() < DELAY {
-                std::thread::sleep(DELAY - start.elapsed());
+            if start.elapsed() <= DELAY {
+                continue;
             }
             game.step();
             self.render(&game);
