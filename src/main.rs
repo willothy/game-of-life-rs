@@ -50,10 +50,8 @@ impl GameOfLife {
 
     pub fn count_neighbors(&self, x: usize, y: usize) -> usize {
         let mut count = 0;
-        let x = x.min(self.size.0 - 2);
-        let y = y.min(self.size.1 - 2);
-        for i in x.saturating_sub(1)..=x + 1 {
-            for j in y.saturating_sub(1)..=y + 1 {
+        for i in x.saturating_sub(1)..=(x + 1).min(self.size.0 - 1) {
+            for j in y.saturating_sub(1)..=(y + 1).min(self.size.1 - 1) {
                 if i == x && j == y {
                     continue;
                 }
@@ -161,7 +159,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None => {}
             },
             Err(_) => {
-                panic!("bruh");
+                break;
             }
         }
         game.step();
