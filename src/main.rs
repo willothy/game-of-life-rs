@@ -16,6 +16,105 @@ pub trait Frontend {
     fn run(&mut self, game: &mut GameOfLife) -> Result<(), Box<dyn Error>>;
 }
 
+pub struct BlockRenderer<T: Terminal> {
+    screen: BufferedTerminal<T>,
+}
+
+impl<T: Terminal> BlockRenderer<T> {
+    pub fn new(screen: BufferedTerminal<T>) -> Result<Self, Box<dyn Error>> {
+        Ok(Self { screen })
+    }
+
+    pub fn size(&self) -> (usize, usize) {
+        let (w, h) = self.screen.dimensions();
+        (w, h)
+    }
+
+    pub fn screen(&mut self) -> &mut BufferedTerminal<T> {
+        &mut self.screen
+    }
+
+    pub fn render(&mut self, game: &GameOfLife) {
+        if self.screen.dimensions() != game.size {
+            self.screen.resize(game.size.0, game.size.1);
+        }
+        for y in 0..game.size.1 {
+            for x in 0..game.size.0 {
+                let char = if game.get(x, y) { '█' } else { ' ' };
+                self.screen.add_change(Change::CursorPosition {
+                    x: termwiz::surface::Position::Absolute(x as usize),
+                    y: termwiz::surface::Position::Absolute(y as usize),
+                });
+                self.screen.add_change(&char.to_string());
+            }
+        }
+        self.screen.flush().ok();
+    }
+}
+
+impl<T: Terminal> Frontend for BlockRenderer<T> {
+    fn run(&mut self, game: &mut GameOfLife) -> Result<(), Box<dyn Error>> {
+        let term = self.screen().terminal();
+        term.enter_alternate_screen()?;
+        term.set_raw_mode()?;
+        self.screen
+            .add_change(Change::CursorVisibility(CursorVisibility::Hidden));
+        let mut start = Instant::now();
+        loop {
+            let delay = if start.elapsed() >= DELAY {
+                start = Instant::now();
+                DELAY
+            } else {
+                DELAY.saturating_sub(start.elapsed())
+            };
+            match self.screen.terminal().poll_input(Some(delay)) {
+                Ok(res) => match res {
+                    Some(evt) => match evt {
+                        termwiz::input::InputEvent::Key(k) => {
+                            if k.key == termwiz::input::KeyCode::Char('q') {
+                                break;
+                            }
+                        }
+                        termwiz::input::InputEvent::Resized { cols, rows } => {
+                            *game = GameOfLife::new((cols as usize * 2, rows as usize * 3));
+                            continue;
+                        }
+                        termwiz::input::InputEvent::Wake => {
+                            continue;
+                        }
+                        termwiz::input::InputEvent::Mouse(MouseEvent {
+                            x,
+                            y,
+                            mouse_buttons,
+                            ..
+                        }) => {
+                            if mouse_buttons.contains(MouseButtons::LEFT) {
+                                game.set(x as usize, y as usize, true);
+                            }
+                        }
+                        _ => {}
+                    },
+                    None => {}
+                },
+                Err(_) => {
+                    break;
+                }
+            }
+            if start.elapsed() <= DELAY {
+                continue;
+            }
+            game.step();
+            self.render(&game);
+            self.screen.flush()?;
+        }
+
+        self.screen.terminal().exit_alternate_screen()?;
+        self.screen
+            .add_change(Change::CursorVisibility(CursorVisibility::Visible));
+        Ok(())
+    }
+}
+
 pub struct BrailleRenderer<T: Terminal> {
     screen: BufferedTerminal<T>,
 }
@@ -89,10 +188,13 @@ impl<T: Terminal> Frontend for BrailleRenderer<T> {
             .add_change(Change::CursorVisibility(CursorVisibility::Hidden));
         let mut start = Instant::now();
         loop {
-            if start.elapsed() >= DELAY {
+            let delay = if start.elapsed() >= DELAY {
                 start = Instant::now();
-            }
-            match self.screen.terminal().poll_input(Some(DELAY)) {
+                DELAY
+            } else {
+                DELAY.saturating_sub(start.elapsed())
+            };
+            match self.screen.terminal().poll_input(Some(delay)) {
                 Ok(res) => match res {
                     Some(evt) => match evt {
                         termwiz::input::InputEvent::Key(k) => {
@@ -225,7 +327,8 @@ const DELAY: Duration = Duration::from_millis(50);
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let caps = Capabilities::new_from_env()?;
     let screen = BufferedTerminal::new(new_terminal(caps)?)?;
-    let mut render = BrailleRenderer::new(screen)?;
+    // let mut render = BrailleRenderer::new(screen)?;
+    let mut render = BlockRenderer::new(screen)?;
     let mut game = GameOfLife::new(render.size());
 
     render.run(&mut game)?;
